@@ -13,21 +13,25 @@ You can set values, get them back, give them an expiration time, and save/load e
 
 ## Commands
 
-`SET <key> <value>` — store a string
-`SETEX <key> <seconds> <value>` — store a string that expires after N seconds
-`GET <key>` — get a value
-`DEL <key>` — delete a key
-`EXISTS <key>` — check if a key exists
-`LPUSH <key> <value>` — add a value to the front of a list
-`LPOP <key>` — remove and return the front of a list
-`KEYS` — show all current keys
-`SIZE` — count current keys
-`CLEAR` — wipe everything
-`SAVE <filename>` — save the database to a file
-`LOAD <filename>` — load a file and merge it into the current database
-`RESTORE <filename>` — load a file and replace the current database with it
-`HELP` — list all commands
-`EXIT` / `QUIT` — quit
+| Command | Description |
+|---|---|
+| `SET <key> <value>` | Store a string, no expiration |
+| `SETEX <key> <seconds> <value>` | Store a string that expires after N seconds |
+| `GET <key>` | Retrieve a value |
+| `DEL <key>` | Delete a key |
+| `EXISTS <key>` | Check if a key exists |
+| `LPUSH <key> <value>` | Push a value to the front of a list |
+| `LPOP <key>` | Pop a value from the front of a list |
+| `KEYS` | List all live keys |
+| `SIZE` | Count all live keys |
+| `CLEAR` | Remove everything |
+| `SAVE <filename>` | Write the database to a JSON file |
+| `LOAD <filename>` | Merge a JSON file into the current database |
+| `RESTORE <filename>` | Replace the current database with a JSON file |
+| `HELP` | Show command reference |
+| `VERSION` | Show version |
+| `EXIT` / `QUIT` | Quit |
+
 
 ## A couple of interesting design decisions
 
