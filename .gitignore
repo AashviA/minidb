@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.json
+!example_db.json
+.vscode/
+.idea/
+.DS_Store
