@@ -34,7 +34,7 @@ You can set values, get them back, give them an expiration time, and save/load e
 
 ## How to run it
 
-The core database needs only Python 3.7+ and nothing else:
+The core database needs only Python 3.7+ and the demos need 3.9+:
 
 ```bash
 python minidb.py
@@ -73,6 +73,32 @@ python llm_cache.py
 The first call takes a second or two (real API call). The second call with
 the same prompt is near-instant, because it comes from the cache.
 
+## Bonus: semantic caching
+
+`semantic_cache.py` extends the LLM cache so it can reuse an answer for a
+*similar* question, not just an identical one. "What's France's capital?"
+can hit the cached answer for "What is the capital of France?".
+
+Each prompt is turned into a vector (a list of 384 numbers) by a small
+local embedding model (`all-MiniLM-L6-v2`, via the `sentence-transformers`
+library). A new prompt is compared against the stored ones using cosine
+similarity, and if the best match scores above a threshold, the stored
+answer is reused. The vectors are stored in MiniDB alongside the responses,
+with the same TTL expiry.
+
+Install the extra packages (the first run also downloads the model, about
+90 MB):
+
+```bash
+pip install -r requirements-demos.txt
+python semantic_cache.py
+```
+
+Things to know:
+- The similarity threshold (0.85) needs tuning.
+- Each lookup compares against every stored entry, which is fine for a
+  demo but wouldn't scale. Real systems use a vector index for this.
+
 ## A couple of interesting design decisions
 
 **Why does it use `time.monotonic()` instead of a normal clock?**
@@ -97,3 +123,4 @@ fully old or fully new, never broken.
 - If you run two copies of MiniDB on the same file, they'll overwrite
   each other. There's no protection against that.
 - No limit on how big a key, value, or file can be.
+- The semantic cache’s matching is only as good as the embedding model and the threshold.
