@@ -32,6 +32,46 @@ You can set values, get them back, give them an expiration time, and save/load e
 | `VERSION` | Show version |
 | `EXIT` / `QUIT` | Quit |
 
+## How to run it
+
+The core database needs only Python 3.7+ and nothing else:
+
+```bash
+python minidb.py
+```
+
+## Bonus: using MiniDB as an LLM response cache
+
+`llm_cache.py` is an optional demo showing a real use for the TTL feature.
+Calling an AI model is slow and costs money, so before each call it checks
+whether the same prompt was already answered recently. If so, it returns the
+stored answer instantly instead of calling the model again.
+
+- The prompt is hashed (SHA-256) to make a safe cache key
+- On a cache miss, it calls the Groq API and stores the reply with `SETEX`
+- On a cache hit, it returns the stored reply with no API call
+
+This demo needs two extra packages (the core database does not):
+
+```bash
+pip install requests python-dotenv
+```
+
+Create a `.env` file in the project folder containing your own key, which
+is never committed to the repo:
+
+```
+GROQ_API_KEY=your_key_here
+```
+
+Then run:
+
+```bash
+python llm_cache.py
+```
+
+The first call takes a second or two (real API call). The second call with
+the same prompt is near-instant, because it comes from the cache.
 
 ## A couple of interesting design decisions
 
