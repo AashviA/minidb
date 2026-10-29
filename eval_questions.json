@@ -1,0 +1,37 @@
+[
+  { "prompt": "What is the deadline to enter the hostel at night?", "expect": "miss" },
+  { "prompt": "Curfew timings for tonight?", "expect": "hit" },
+  { "prompt": "Can I come back to the hostel at 11:30 PM?", "expect": "hit" },
+  { "prompt": "What happens if I am late to the hostel?", "expect": "miss" },
+  
+  { "prompt": "What time does dinner start?", "expect": "miss" },
+  { "prompt": "Dinner timings for today?", "expect": "hit" },
+  { "prompt": "Is the mess open for lunch right now?", "expect": "miss" },
+  { "prompt": "When does breakfast service end?", "expect": "miss" },
+  { "prompt": "Can I get food in the mess at 3 PM?", "expect": "miss" },
+
+  { "prompt": "Where do I go to collect my Amazon parcel?", "expect": "miss" },
+  { "prompt": "Where do we pick up online shopping orders?", "expect": "hit" },
+  { "prompt": "Can the delivery guy come inside the hostel?", "expect": "miss" },
+  { "prompt": "The Zomato guy is outside the gate, do I have to go out?", "expect": "hit" },
+  { "prompt": "Will the guard accept my delivery package if I'm in class?", "expect": "miss" },
+
+  { "prompt": "Hostel Wi-Fi is not working.", "expect": "miss" },
+  { "prompt": "The internet connection keeps dropping continuously.", "expect": "hit" },
+  { "prompt": "How to log into the hostel internet?", "expect": "miss" },
+  { "prompt": "Wi-Fi speed is very slow in my room today.", "expect": "miss" },
+  { "prompt": "Whom to contact for Wi-Fi complaints?", "expect": "miss" },
+
+  { "prompt": "The fan in my room stopped working.", "expect": "miss" },
+  { "prompt": "Where do I report a leaking tap in the bathroom?", "expect": "miss" },
+  { "prompt": "There is no hot water in the washroom.", "expect": "miss" },
+  { "prompt": "Where is the attendant's office to file a complaint?", "expect": "miss" },
+  { "prompt": "My room window pane is broken, where to complain?", "expect": "hit" },
+
+  { "prompt": "How to apply for a night-out leave?", "expect": "miss" },
+  { "prompt": "I need a leave application form for going home.", "expect": "hit" },
+  { "prompt": "Where is the warden's office?", "expect": "miss" },
+  { "prompt": "When is the warden available to sign out-forms?", "expect": "miss" },
+  { "prompt": "Can I stay out of the hostel for the weekend?", "expect": "hit" },
+  { "prompt": "Is the main gate locked after 11 PM?", "expect": "hit" }
+]
