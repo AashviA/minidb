@@ -20,6 +20,7 @@ load_dotenv()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
 
 def hash_prompt(prompt: str) -> str:
@@ -41,16 +42,15 @@ def call_llm(prompt: str) -> str:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "llama-3.1-8b-instant",  
+        "model": MODEL,  
         "messages": [{"role": "user", "content": prompt}],
     }
 
     response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
-    response.raise_for_status()  # raises an error if the request failed
+    if not response.ok:
+        raise RuntimeError(f"Groq API error {response.status_code}: {response.text}")
 
-    data = response.json()
-    return data["choices"][0]["message"]["content"]
-
+    return response.json()["choices"][0]["message"]["content"]
 
 def cached_llm_call(db: Database, prompt: str, ttl_seconds: float = 300) -> tuple[str, bool]:
     """Returns (response_text, was_cache_hit)."""
