@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.json
 !eval_questions.json
+!eval_questions_v2.json
 .vscode/
 .idea/
 .DS_Store
