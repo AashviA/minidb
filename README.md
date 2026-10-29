@@ -1,126 +1,285 @@
-# minidb
+# MiniDB & Semantic Cache
 
-A command-line in-memory key-value store with TTL-based key expiration and JSON persistence, built from scratch in pure Python (no database libraries).
-You can set values, get them back, give them an expiration time, and save/load everything to a file.
+An in-memory key-value database built from scratch in pure Python, plus a
+semantic cache on top of it that answers repeated and reworded questions in
+about 15 milliseconds instead of making a roughly 1-second LLM API call.
 
-## What it can do
+## At a glance
 
-- Store and retrieve string values (`SET`, `GET`, `DEL`, `EXISTS`)
-- Store values that auto-expire after N seconds (`SETEX`)
-- Store lists (`LPUSH`, `LPOP`)
-- Save the whole database to a JSON file and load it back later
-- Handles a bunch of edge cases cleanly: bad input, corrupted files, invalid expiration times, etc., instead of crashing
+| | Model call (cache miss) | Cache hit |
+|---|---|---|
+| Latency | ~0.8-1.1 s | ~15-19 ms |
+| API tokens used | Yes | None |
+| Speed-up | | ~50-65x faster |
 
-## Commands
+Tested on 40 hostel-FAQ questions with a similarity threshold of 0.70:
+6 of 40 calls (15%) were served from the cache, 5 of the 14 reworded
+questions were matched, and 1 answer was wrong. Full results are
+[below](#results).
 
-| Command | Description |
-|---|---|
-| `SET <key> <value>` | Store a string, no expiration |
-| `SETEX <key> <seconds> <value>` | Store a string that expires after N seconds |
-| `GET <key>` | Retrieve a value |
-| `DEL <key>` | Delete a key |
-| `EXISTS <key>` | Check if a key exists |
-| `LPUSH <key> <value>` | Push a value to the front of a list |
-| `LPOP <key>` | Pop a value from the front of a list |
-| `KEYS` | List all live keys |
-| `SIZE` | Count all live keys |
-| `CLEAR` | Remove everything |
-| `SAVE <filename>` | Write the database to a JSON file |
-| `LOAD <filename>` | Merge a JSON file into the current database |
-| `RESTORE <filename>` | Replace the current database with a JSON file |
-| `HELP` | Show command reference |
-| `VERSION` | Show version |
-| `EXIT` / `QUIT` | Quit |
+The project has two parts:
 
-## How to run it
+1. **MiniDB (the core).** A command-line key-value database with key
+   expiration (TTL), list values and JSON persistence. Standard library
+   only: no SQLite, Redis or caching packages.
+2. **A semantic cache for LLM calls (the extension).** It uses MiniDB as its
+   storage layer to cache answers from a real LLM API (Groq), and reuses an
+   answer when a *similar* question comes in, matched with sentence
+   embeddings.
 
-The core database needs only Python 3.7+ and the demos need 3.9+:
+## The problem
+
+Calling an LLM is slow, it costs tokens, and APIs rate-limit you. In my
+tests a call to Groq's `gpt-oss-20b` took about 0.8-1.1 seconds on average,
+and on the free tier I hit the tokens-per-minute limit (HTTP 429) after only
+a handful of requests.
+
+Meanwhile, apps often get the same question again and again in different
+words. A hostel FAQ bot might see "What time is curfew?", "What's the
+deadline to be back at night?" and "What time do we have to be back?" in one
+evening. A normal cache only helps when the text is identical, so it misses
+all of them, and each one pays for a fresh API call.
+
+## The idea
+
+Turn each question into a vector (a list of numbers) so that questions with
+similar meaning land close together. When a new question arrives, check
+whether it's close enough to one already answered. If it is, return the
+stored answer. If not, call the LLM and store the new answer for next time.
+
+The goal: serve repeated and reworded questions from the cache without
+serving wrong answers, and measure honestly how well that works.
+
+## How it works
+
+```
+Incoming question
+   |
+   v
+Exact match in MiniDB? --yes--> return cached answer        (near-instant)
+   | no
+   v
+Embed the question (all-MiniLM-L6-v2 -> 384 numbers)
+   |
+   v
+Compare with every stored question (cosine similarity)
+   |
+   |-- best score >= threshold (0.70) --> return cached answer   (~15 ms)
+   |
+   '-- otherwise --> call the LLM API (Groq, gpt-oss-20b)        (~1 s)
+                        |
+                        '--> store question vector + answer in MiniDB
+                             with a 24-hour TTL
+```
+
+**LLM API.** A cache miss sends an HTTPS request to Groq's
+OpenAI-compatible chat-completions endpoint, authenticated with an API key
+read from a `.env` file that is never committed. If Groq returns a
+rate-limit error (HTTP 429), the code waits as long as Groq asks and
+retries. Other errors show Groq's message instead of a bare status code. The
+model name is a setting (`GROQ_MODEL`), because models get retired: the
+first model I used, `llama-3.1-8b-instant`, was shut down by Groq while I
+was building this.
+
+**Embeddings.** An embedding model turns a sentence into a list of numbers
+(a vector), so that sentences with similar meaning end up near each other.
+I use `all-MiniLM-L6-v2` from the `sentence-transformers` library, which
+produces 384 numbers per sentence and runs locally. Embedding needs no API
+call and costs no tokens.
+
+**Retrieval.** Finding a cached answer is a small nearest-neighbour search.
+The new question's vector is compared with every stored question's vector
+using cosine similarity (1.0 means the same direction, 0 means unrelated),
+and the best match is returned if it scores above the threshold. I wrote the
+similarity function and the lookup logic myself. It's a plain linear scan,
+which is fine at this size but won't scale (see limitations).
+
+**Storage.** Each cache entry (question, vector, answer, embedding model
+name) is stored in MiniDB as a JSON string under a `sem:` key. The TTL from
+`SETEX` makes old answers expire on their own, and `SAVE` / `LOAD` let the
+cache survive restarts. Entries record which embedding model made them, and
+entries from a different model, or corrupted ones, are skipped on load,
+because vectors from different models can't be compared.
+
+**Evaluation.** `eval_cache.py` replays a labelled list of questions
+against an empty cache, times every call, and reports hits, wrong hits and
+latency, so the threshold is chosen from data rather than guessed.
+
+## Results
+
+**Test set:** 40 hostel-FAQ questions, asked in order. 14 are rewordings of
+an earlier question (should hit the cache) and 26 are distinct questions
+(should not). A hit only counts as correct if the cached answer to an
+earlier question would fully answer the new one. Related-but-different
+questions (for example, "What happens if I am late?" after "What is the
+deadline to enter?") are deliberately labelled as should-miss, because
+they're the hardest case.
+
+Each call is timed with `time.perf_counter()`, the embedding model is loaded
+before timing starts, and every run starts with an empty cache.
+
+| Threshold | Calls served from cache | Correct hits | Wrong answers | Avg cache hit | Avg model call |
+|---|---|---|---|---|---|
+| 0.60 | 13 / 40 | 8 of 14 | 5 | 14.6 ms | 784 ms |
+| 0.65 | 9 / 40 | 5 of 14 | 4 | 14.9 ms | 978 ms |
+| **0.70** | **6 / 40** | **5 of 14** | **1** | **15.4 ms** | **1014 ms** |
+| 0.75 | 2 / 40 | 2 of 14 | 0 | 16.7 ms | 1045 ms |
+| 0.80 | 1 / 40 | 1 of 14 | 0 | 18.8 ms | 1067 ms |
+
+- **Latency:** a cache hit takes about 15-19 ms (this includes embedding the
+  question and scanning the stored entries), and a model call takes about
+  0.8-1.1 s. Hits are roughly 50-65x faster and save about a second each.
+- **Best trade-off, threshold 0.70:** 15% of calls were served from the
+  cache and 5 of 14 rewordings (36%) were matched, with 1 wrong answer. That
+  one was a borderline case: "Can I stay out of the hostel for the weekend?"
+  matched "Can I come back to the hostel at 11:30 PM?".
+- **Safest, threshold 0.75:** no wrong answers, but only 2 of 40 calls (5%)
+  were avoided.
+- **Lowering the threshold backfires:** going from 0.70 to 0.60 catches 3
+  more correct rewordings but raises wrong answers from 1 to 5.
+
+## What I learned
+
+- **No single threshold separates right from wrong.** Correct rewordings
+  score between about 0.60 and 0.80, and wrong matches score between 0.62
+  and 0.73. They overlap. Because every question is about the same hostel,
+  related-but-different questions look similar to the model.
+- **How you label the test set decides the result.** My first labelling
+  counted loosely related questions as "should hit", which made some results
+  look better and some worse than they were. I switched to a strict rule
+  (the cached answer must fully answer the new question) and rewrote the
+  set. The numbers above use that version.
+- **Some questions shouldn't be cached.** "Right now", "tonight" and "today"
+  change meaning depending on when you ask, so a cached answer goes stale. A
+  real system would skip caching these or give them a short TTL.
+- **On a free API tier, caching is more than a speed-up.** Every avoided call
+  also avoids the tokens, and the rate-limit pressure, that come with it.
+
+## Run it
+
+**Quickstart: the core database** needs Python 3.7+ and nothing else:
 
 ```bash
 python minidb.py
 ```
 
-## Bonus: using MiniDB as an LLM response cache
+**The LLM cache demos** need Python 3.9+ and a free Groq API key from
+console.groq.com.
 
-`llm_cache.py` is an optional demo showing a real use for the TTL feature.
-Calling an AI model is slow and costs money, so before each call it checks
-whether the same prompt was already answered recently. If so, it returns the
-stored answer instantly instead of calling the model again.
+1. Install the packages (the first run also downloads the embedding model,
+   about 90 MB):
 
-- The prompt is hashed (SHA-256) to make a safe cache key
-- On a cache miss, it calls the Groq API and stores the reply with `SETEX`
-- On a cache hit, it returns the stored reply with no API call
+   ```bash
+   pip install -r requirements-demos.txt
+   ```
 
-This demo needs two extra packages (the core database does not):
+2. Create a file named `.env` in the project folder containing your key. It's
+   listed in `.gitignore`, so it never gets committed:
 
-```bash
-pip install requests python-dotenv
-```
+   ```
+   GROQ_API_KEY=your_key_here
+   ```
 
-Create a `.env` file in the project folder containing your own key, which
-is never committed to the repo:
+   You can also set `GROQ_MODEL` in the same file to use a different Groq
+   model.
 
-```
-GROQ_API_KEY=your_key_here
-```
+3. Run a demo or the evaluation. The evaluation makes a real API call for
+   every cache miss:
 
-Then run:
+   ```bash
+   python llm_cache.py                                 # exact-match cache demo
+   python semantic_cache.py                            # semantic cache demo
+   python eval_cache.py eval_questions_v2.json 0.70    # evaluation at a threshold
+   ```
 
-```bash
-python llm_cache.py
-```
+## MiniDB commands
 
-The first call takes a second or two (real API call). The second call with
-the same prompt is near-instant, because it comes from the cache.
+`SET <key> <value>` — store a string, no expiration
 
-## Bonus: semantic caching
+`SETEX <key> <seconds> <value>` — store a string that expires after N seconds
 
-`semantic_cache.py` extends the LLM cache so it can reuse an answer for a
-*similar* question, not just an identical one. "What's France's capital?"
-can hit the cached answer for "What is the capital of France?".
+`GET <key>` — retrieve a value
 
-Each prompt is turned into a vector (a list of 384 numbers) by a small
-local embedding model (`all-MiniLM-L6-v2`, via the `sentence-transformers`
-library). A new prompt is compared against the stored ones using cosine
-similarity, and if the best match scores above a threshold, the stored
-answer is reused. The vectors are stored in MiniDB alongside the responses,
-with the same TTL expiry.
+`DEL <key>` — delete a key
 
-Install the extra packages (the first run also downloads the model, about
-90 MB):
+`EXISTS <key>` — check if a key exists
 
-```bash
-pip install -r requirements-demos.txt
-python semantic_cache.py
-```
+`LPUSH <key> <value>` — push a value to the front of a list
 
-Things to know:
-- The similarity threshold (0.85) needs tuning.
-- Each lookup compares against every stored entry, which is fine for a
-  demo but wouldn't scale. Real systems use a vector index for this.
+`LPOP <key>` — pop a value from the front of a list
 
-## A couple of interesting design decisions
+`KEYS` — list all live keys
 
-**Why does it use `time.monotonic()` instead of a normal clock?**
-A normal clock (`time.time()`) can shift. If your computer's
-clock gets adjusted, a key's expiration could suddenly be wrong.
-`time.monotonic()` only counts forward, so it's safer for
-measuring how much time is left. The downside is that it resets
-every time the program restarts, so saving and loading expiration
-times took a bit of extra thought (the code converts a TTL into
-"seconds remaining" before saving, then re-applies that when loading).
+`SIZE` — count all live keys
 
-**Why save to a temp file first instead of writing directly?**
-If the program crashed halfway through writing the save file, you'd be
-left with a corrupted, half-written JSON file. Instead, it writes to a
-separate temporary file first, and only swaps it in as the real file
-once the write is fully done. That way the save file is always either
-fully old or fully new, never broken.
+`CLEAR` — remove everything
+
+`SAVE <filename>` — write the database to a JSON file
+
+`LOAD <filename>` — merge a JSON file into the current database
+
+`RESTORE <filename>` — replace the current database with a JSON file
+
+`HELP` — show the command reference
+
+`VERSION` — show the version
+
+`EXIT` / `QUIT` — quit
+
+## Design decisions in the core database
+
+**Why `time.monotonic()` instead of a normal clock?** A normal clock
+(`time.time()`) can shift if your computer's clock gets adjusted, which
+would make a key's expiration suddenly wrong. `time.monotonic()` only counts
+forward, so it's safer for measuring how much time is left. The downside is
+that it resets every time the program restarts, so the code converts each
+TTL into "seconds remaining" before saving and re-applies that when loading.
+One consequence: time that passes while the program is closed isn't counted
+against a key's TTL.
+
+**Why save to a temp file first?** If the program crashed halfway through
+writing the save file, you'd be left with a half-written, corrupted JSON
+file. Writing to a temporary file and swapping it in only once the write is
+complete means the save file is always either fully old or fully new.
+
+**Input handling.** Corrupted or old-format files, bad expiration values
+(negative, zero, NaN, infinity) and wrong-type commands are rejected with a
+clear message instead of crashing. Keys containing spaces or quote
+characters are rejected too, because the parser doesn't support quoting and
+would otherwise silently create a garbage key.
 
 ## Known limitations
 
-- Keys can't have spaces or quote marks in them.
-- If you run two copies of MiniDB on the same file, they'll overwrite
-  each other. There's no protection against that.
-- No limit on how big a key, value, or file can be.
-- The semantic cache’s matching is only as good as the embedding model and the threshold.
+- **The semantic cache can serve a wrong answer.** Matching is only as good
+  as the embedding model and the threshold, and the results above show both
+  have limits.
+- **Lookup is a linear scan** (O(n)) over every stored entry. That's fine for
+  a demo, but a larger cache would need a vector index such as FAISS or HNSW.
+- **Small evaluation set:** 40 questions, 14 rewordings, one domain. One
+  question moves a result by several percentage points, so small differences
+  shouldn't be over-read.
+- **Time-relative questions** ("today", "right now") can return stale
+  answers until their TTL expires.
+- Keys can't contain spaces or quote characters.
+- There's no file locking: two copies of MiniDB writing to the same file
+  overwrite each other.
+- There are no limits on key, value or file size.
+
+## What I'd try next
+
+- Compare a larger embedding model on the same test set.
+- Add a second check for borderline matches (for example, a cheap LLM call
+  to confirm the cached answer fits) and measure whether it's worth the
+  extra call.
+- Skip caching for time-relative questions, or give them a short TTL.
+- Replace the linear scan with a vector index and measure how lookup time
+  grows with the size of the cache.
+
+## Project files
+
+- `minidb.py` — the key-value database and CLI (standard library only)
+- `llm_cache.py` — exact-match LLM response cache and the Groq API call
+- `semantic_cache.py` — embedding-based semantic cache
+- `eval_cache.py` — evaluation and latency measurement
+- `eval_questions_v2.json` — the labelled test set
+- `requirements-demos.txt` — extra packages for the LLM demos
