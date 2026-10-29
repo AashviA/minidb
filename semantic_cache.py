@@ -94,6 +94,7 @@ class SemanticCache:
         query_vector = embed(prompt)
         best_score = 0.0
         best_response = None
+        best_prompt = None          # remember which stored question matched
 
         for key in self.db.keys():
             if not key.startswith(KEY_PREFIX):
@@ -110,9 +111,13 @@ class SemanticCache:
             if score > best_score:
                 best_score = score
                 best_response = entry["response"]
+                best_prompt = entry.get("prompt", "?")   
 
         if best_response is not None and best_score >= self.threshold:
-            return best_response, f"semantic hit (similarity {best_score:.2f})"
+            return (
+                best_response,
+                f"semantic hit (similarity {best_score:.2f}, matched: {best_prompt!r})",
+            )
         return None
 
     def store(self, prompt: str, response: str) -> None:
