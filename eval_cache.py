@@ -52,6 +52,8 @@ def run_eval(items, threshold):
             "status": status,
             "seconds": elapsed,
         })
+        if got == "miss":
+            time.sleep(8)   # stay under the free tier's tokens-per-minute limit
     return rows
 
 

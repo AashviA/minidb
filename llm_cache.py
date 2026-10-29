@@ -29,8 +29,9 @@ def hash_prompt(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
-def call_llm(prompt: str) -> str:
-    """Send the prompt to Groq's API and return the model's text reply."""
+def call_llm(prompt: str, max_retries: int = 3) -> str:
+    """Send the prompt to Groq and return the reply. If we hit the rate
+    limit (HTTP 429), wait and try again instead of crashing."""
     if not GROQ_API_KEY:
         raise RuntimeError(
             "GROQ_API_KEY not found. Make sure you created a .env file "
@@ -42,15 +43,35 @@ def call_llm(prompt: str) -> str:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": MODEL,  
+        "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
+        "max_completion_tokens": 600,   # caps tokens per call (reasoning tokens count too)
+        "reasoning_effort": "low",      # less "thinking" = fewer tokens, faster
     }
 
-    response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
-    if not response.ok:
-        raise RuntimeError(f"Groq API error {response.status_code}: {response.text}")
+    for attempt in range(max_retries + 1):
+        response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
 
-    return response.json()["choices"][0]["message"]["content"]
+        if response.status_code == 429 and attempt < max_retries:
+            # Groq usually says how long to wait; fall back to 10 seconds.
+            try:
+                wait = float(response.headers.get("retry-after", 10))
+            except ValueError:
+                wait = 10.0
+            print(f"  (rate limited, waiting {wait:.0f}s then retrying...)")
+            time.sleep(wait + 1)
+            continue
+
+        if not response.ok:
+            raise RuntimeError(f"Groq API error {response.status_code}: {response.text}")
+
+        content = response.json()["choices"][0]["message"]["content"]
+        if not content:
+            raise RuntimeError(
+                "Model returned an empty answer. It may have run out of "
+                "tokens while reasoning; try raising max_completion_tokens."
+            )
+        return content
 
 def cached_llm_call(db: Database, prompt: str, ttl_seconds: float = 300) -> tuple[str, bool]:
     """Returns (response_text, was_cache_hit)."""
